@@ -1,0 +1,18 @@
+aws-cdk-lib>=2.60.0
+constructs>=10.0.0,<11.0.0
+
+freezegun
+pytest
+boto3
+moto
+
+##
+## If your project uses cdk version 1.x.x use cdk-nag ^1.0.0
+## If your project uses cdk version 2.x.x use cdk-nag ^2.0.0
+##
+cdk_nag>=2.0.0
+
+bandit
+checkov
+
+urllib3
