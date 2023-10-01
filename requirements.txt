@@ -5,6 +5,7 @@ freezegun
 pytest
 boto3
 moto
+python-dotenv
 
 ##
 ## If your project uses cdk version 1.x.x use cdk-nag ^1.0.0
