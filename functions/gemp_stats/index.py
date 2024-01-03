@@ -1,22 +1,65 @@
 import json
+# boto3 is provided by the lambda runtime environment
 import boto3
+# pymysql is loaded from the requirements.txt
 import pymysql
-import os
+from os import getenv
 from datetime import datetime
 
-# TODO: Load these from AWS Secrets Manager in production
+
+s3 = boto3.client('s3')
+secretsmanager = boto3.client('secretsmanager')
+
+gemp_db_credentials_secret_id = "gempdb"
+
 rds_host = None
 rds_username = None
 rds_password = None
-db_name = None
-s3_bucket_name = None
+rds_dbname = None
+rds_port = None
+rds_engine = None
 
-s3 = boto3.client('s3')
+try:
+  gemp_db_credentials_secret = secretsmanager.get_secret_value(SecretId=gemp_db_credentials_secret_id)
+  gemp_db_credentials_secret_string = json.loads(gemp_db_credentials_secret["SecretString"])    
+  rds_host     = gemp_db_credentials_secret_string["host"]
+  rds_username = gemp_db_credentials_secret_string["username"]
+  rds_password = gemp_db_credentials_secret_string["password"]
+  rds_dbname   = gemp_db_credentials_secret_string["dbname"]
+  rds_port     = gemp_db_credentials_secret_string["port"]
+  rds_engine   = gemp_db_credentials_secret_string["engine"]
 
+except Exception as e:
+  print("Failed to retrieve database credentials from Secrets Manager")
+  print("Tried to pull {} and expected a map with value:".format(gemp_db_credentials_secret_id))
+  print('{"username":"xxxx", "password":"xxxx", "dbname":"gemp-swccg"}')
+  print(e)
+  print("Trying to pull credentials from Environment Variables")
+  rds_host = getenv("RDS_HOST", "localhost")
+  rds_username = getenv("RDS_USERNAME", "gemp")
+  rds_password = getenv("RDS_PASSWORD", "Four_mason8pirate")
+  db_name = getenv("DB_NAME", "gemp-swccg")
+
+
+
+s3_bucket_name = getenv("S3_BUCKET_NAME", "gemp-stats")
+
+
+##
+## Run query against MySQL and upload results to S3.
+## Database connection is re-used across all queries,
+##   so the connection is established outside of the ETL function.
+##
 def etl(conn, query, s3_file_name):
   with conn.cursor() as cur:
-    cur.execute(query)
-    conn.commit()
+    try:
+      cur.execute(query)
+      conn.commit()
+    except Exception as e:
+      print("Unable to query database")
+      print(e)
+      # unable to query database, returning false
+      return False
 
     rows = []
     for row in cur:
@@ -25,21 +68,35 @@ def etl(conn, query, s3_file_name):
 
     # Convert rows to JSON and write to the file
     try:
-      with open(s3_file_name, 'w') as outfile:
-        json.dump({"rows": rows}, outfile)
+      with open(s3_file_name, 'w') as fh:
+        json.dump({"rows": rows}, fh)
     except Exception as error:
+      print("Unable to write query results to file: {}".format(s3_file_name))
       print(error)
+      # writing the file failed, return false
+      return False
 
     # Upload JSON to s3
     try:
-      with open(s3_file_name, 'rb') as data:
-        s3.upload_fileobj(data, s3_bucket_name, s3_file_name)
+      with open(s3_file_name, 'rb') as fh:
+        s3.upload_fileobj(fh, s3_bucket_name, s3_file_name)
+        return True
     except Exception as e:
+      print("Unable to upload file {} to S3 bucket: {}".format(s3_file_name, s3_bucket_name))
       print(e)
+      # upload to s3 failed, return false
+      return False
 
-    return True
+    return False
 
-def handler(event, context):
+##
+## Lambda Handler
+##
+def lambda_handler(event, context):
+
+  ##
+  ## Setup connection to MySQL Database
+  ##
   conn = None
   try:
     conn = pymysql.connect(host=rds_host, user=rds_username, passwd=rds_password, db=db_name, connect_timeout=5)
@@ -48,13 +105,24 @@ def handler(event, context):
     print(e)
     return(json.dumps({"status": "unable to connect to database"}))
 
-  since_datetime = event["since"]
+  ##
+  ## How far in to the past to go.
+  ## Allows passing the date in the *since* variable in to the Lambda event.
+  ## By default, use June 1, 2021.
+  ##
+  since_datetime = event.get("since", "2021-06-01 00:19")
 
+  ##
+  ## Deck Archetype Statistics
+  ##
   stats_query = """
-  select format_name, tournament, winner, loser, win_reason, winner_deck_archetype, loser_deck_archetype, winner_side, enddatetime, id, timestampdiff(second,startdatetime,enddatetime) as GameDuration, sealed_league_type
-  from deck_archetype_view_public
-  where enddatetime >= '%s' """ % (since_datetime,)
+  SELECT format_name, tournament, winner, loser, win_reason, winner_deck_archetype, loser_deck_archetype, winner_side, enddatetime, id, timestampdiff(second,startdatetime,enddatetime) as GameDuration, sealed_league_type
+    FROM deck_archetype_view_public
+   WHERE enddatetime >= '%s' """ % (since_datetime,)
 
+  ##
+  ## Run the query and upload the results to S3 so it can be consumed by the GEMP website.
+  ##
   etl(conn, stats_query, f"gemp-stats-{since_datetime.split(' ')[0]}.json")
 
   return {
@@ -62,18 +130,15 @@ def handler(event, context):
     "body": "OK"
   }
 
+##
+## For local testing, allow a way to call the handler as the main function
+##
 if __name__ == "__main__":
   from dotenv import load_dotenv
   load_dotenv()
-
-  rds_host = os.getenv("RDS_HOST")
-  rds_username = os.getenv("RDS_USERNAME")
-  rds_password = os.getenv("RDS_PASSWORD")
-  db_name = os.getenv("DB_NAME")
-  s3_bucket_name = os.getenv("S3_BUCKET_NAME")
 
   params = {
     "since": "2021-06-01 00:19"
   }
 
-  print(handler(params, ""))
+  print(lambda_handler(params, ""))
