@@ -228,9 +228,9 @@ class GempStatsStack(Stack):
       {"id":"AwsSolutions-S2", "reason":"01234567890123456789"},
       {"id":"AwsSolutions-S10", "reason":"01234567890123456789"},
       {"id":"AwsSolutions-CFR4", "reason":"01234567890123456789"},
+      {"id":"AwsSolutions-CFR1", "reason":"The CloudFront distribution may require Geo restrictions."},
+      {"id":"AwsSolutions-CFR2", "reason":"The CloudFront distribution may require integration with AWS WAF."},
+      {"id":"AwsSolutions-CFR3", "reason":"The CloudFront distribution does not have access logging enabled."},
     ])
-
-
-
 
 

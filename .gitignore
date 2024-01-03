@@ -160,3 +160,5 @@ cython_debug/
 
 gemp-stats*.json
 node_modules
+functions/gemp_stats_share
+cdk.out
