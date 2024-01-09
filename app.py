@@ -5,6 +5,6 @@ from lib.gemp_stats_stack import GempStatsStack
 app = App()
 env = {'region': 'us-east-2'}
 
-GempStatsStack(app, "SsoStack", env=env)
+GempStatsStack(app, "GempStatsStack", env=env)
 
 app.synth()

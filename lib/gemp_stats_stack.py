@@ -13,9 +13,12 @@ from aws_cdk import (
   aws_apigateway as apigw,
   aws_s3 as s3,
   aws_wafv2 as wafv2,
+  aws_ec2 as ec2,
   aws_route53 as r53,
   aws_route53_targets as r53_targets,
   aws_certificatemanager as acm,
+  aws_events_targets as targets,
+  aws_events as events,
   Aws, Duration, Stack, Tags, Aspects, Fn, RemovalPolicy, CustomResource, CfnMapping, CfnOutput
 )
 from constructs import Construct
@@ -122,6 +125,13 @@ class GempStatsStack(Stack):
 
     gemp_stats_lambda_policy.add_statements(iam.PolicyStatement(
       effect   =iam.Effect.ALLOW,
+      actions  =["ec2:CreateNetworkInterface", "ec2:DescribeNetworkInterfaces", "ec2:DeleteNetworkInterface"],
+      resources=["*"],
+    ))
+
+
+    gemp_stats_lambda_policy.add_statements(iam.PolicyStatement(
+      effect   =iam.Effect.ALLOW,
       actions  =["s3:put*", "s3:get*", "s3:list*"],
       resources=[gemp_stats_bucket.bucket_arn, gemp_stats_bucket.bucket_arn+"/*"],
     ))
@@ -146,8 +156,12 @@ class GempStatsStack(Stack):
 
     gemp_stats_lambda_policy.add_statements(iam.PolicyStatement(
       effect   =iam.Effect.ALLOW,
-      actions  =["secretsmanager:Get*"],
-      resources=["arn:aws:secretsmanager:"+Aws.REGION+":"+Aws.ACCOUNT_ID+":secret:gempdb*"],
+      actions  =[
+                "secretsmanager:DescribeSecret",
+                "secretsmanager:ListSecretVersionIds",
+                "secretsmanager:Get*"
+      ],
+      resources=["arn:aws:secretsmanager:"+Aws.REGION+":"+Aws.ACCOUNT_ID+":secret:gempdb_stats*"],
     ))
 
     gemp_stats_lambda_role = iam.Role(self, 'GempStatsLambdaRole',
@@ -159,7 +173,16 @@ class GempStatsStack(Stack):
     gemp_stats_lambda_role.add_managed_policy(gemp_stats_lambda_policy)
 
 
+    vpc_id     = "vpc-4336702b"
+    azs        = ["us-east-2b", "us-east-2a", "us-east-2c"]
+    subnet_ids = ["subnet-6a832a10", "subnet-40b0c028", "subnet-3ce8f571"]
+    subnets = [ec2.Subnet.from_subnet_id(self, "Subnet" + subnet_id, subnet_id) for subnet_id in subnet_ids]
 
+    ##
+    ## https://docs.aws.amazon.com/cdk/api/v2/python/aws_cdk.aws_ec2/Vpc.html#aws_cdk.aws_ec2.Vpc.from_vpc_attributes
+    ##
+    vpc = ec2.Vpc.from_vpc_attributes(self, "Vpc", availability_zones=azs, vpc_id=vpc_id)
+    security_group = ec2.SecurityGroup.from_security_group_id(self, "SecurityGroup", "sg-05efc34d9b296cbc7", mutable=False)
 
     ########################################
     ##
@@ -177,16 +200,30 @@ class GempStatsStack(Stack):
       runtime      = lfn.Runtime.PYTHON_3_10,
       architecture = lfn.Architecture.ARM_64,
       memory_size  = 512, # default = 128 MB
-      timeout      = Duration.seconds(20),
+      timeout      = Duration.seconds(30),
       handler      = "index.lambda_handler",
       code         = lfn.Code.from_asset(gemp_stats_share_dir),
       role         = gemp_stats_lambda_role,
       environment  = { "S3_BUCKET_NAME":bucket_name },
+      vpc          = vpc,
+      vpc_subnets  = ec2.SubnetSelection(subnets=subnets),
+      security_groups = [security_group],
     )
 
 
 
-
+    ##
+    ## EventBridge rule to run the lambda function daily
+    ##
+    gemp_stats_function_target = targets.LambdaFunction(gemp_stats_function,
+      #dead_letter_queue=queue, # Optional: add a dead letter queue
+      max_event_age=Duration.hours(2), # Optional: set the maxEventAge retry policy
+      retry_attempts=2
+    )
+    events.Rule(self, "GemStatsScheduleRule",
+      schedule=events.Schedule.cron(minute="4", hour="4"),
+      targets=[gemp_stats_function_target]
+    )
 
 
 
